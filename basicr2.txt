@@ -1,0 +1,72 @@
+# 📥 LECTURA DE DATOS
+df <- read.csv("archivo.csv", sep = ",", header = TRUE)
+# Si es Excel
+library(readxl)
+df <- read_excel("archivo.xlsx")
+
+# 📊 ANÁLISIS UNIVARIADO
+summary(df)
+library(DataExplorer)
+plot_intro(df)
+plot_histogram(df)
+
+# 🔁 ANÁLISIS BIVARIADO
+# Numérica vs Categórica
+boxplot(Income ~ Gender, data = df)
+# Numérica vs Numérica
+plot(df$Age, df$Income)
+# Categórica vs Categórica
+table(df$Gender, df$Default)
+
+# 🛠️ IMPUTACIÓN DE DATOS
+df$Income[is.na(df$Income)] <- mean(df$Income, na.rm = TRUE)
+df$Income[is.na(df$Income)] <- median(df$Income, na.rm = TRUE)
+library(mice)
+df_imp <- mice(df, m=1, method='pmm')
+df <- complete(df_imp)
+
+# 🔗 MATRIZ DE CORRELACIÓN
+library(corrplot)
+cor_matrix <- cor(df[sapply(df, is.numeric)], use = "complete.obs")
+corrplot(cor_matrix, method = "color")
+
+# 🔂 PARTICIÓN DE DATOS
+set.seed(123)
+library(caret)
+particion <- createDataPartition(df$target, p = 0.7, list = FALSE)
+train <- df[particion, ]
+test <- df[-particion, ]
+
+# 🔄 VALIDACIÓN CRUZADA (K-FOLD)
+ctrl <- trainControl(method = "cv", number = 5)
+modelo <- train(target ~ ., data = train, method = "glm", trControl = ctrl)
+
+# 🌳 ÁRBOLES DE DECISIÓN
+library(rpart)
+arbol <- rpart(target ~ ., data = train, method = "class")
+library(rpart.plot)
+rpart.plot(arbol)
+
+# 📉 REGRESIÓN LOGÍSTICA
+modelo <- glm(target ~ ., data = train, family = "binomial")
+summary(modelo)
+
+# ✅ MATRIZ DE CONFUSIÓN
+library(caret)
+pred <- predict(modelo, test, type = "response")
+pred_clas <- ifelse(pred > 0.5, 1, 0)
+confusionMatrix(as.factor(pred_clas), as.factor(test$target))
+
+# 📈 CURVA ROC Y AUC
+library(pROC)
+roc_obj <- roc(test$target, pred)
+plot(roc_obj)
+auc(roc_obj)
+
+# 📐 WOE E IV (para scoring)
+library(scorecard)
+bins <- woebin(df, y = "target")
+df_woe <- woebin_ply(df, bins)
+
+# 📦 EXPORTAR DATOS
+write.csv(df, "salida.csv", row.names = FALSE)
