@@ -1,79 +1,96 @@
-# ---------------------------
-# 1. Cargar librerías necesarias
-# ---------------------------
-library(caret)
-library(rpart)
-library(rpart.plot)
-library(pROC)
-library(dplyr)
+#Cargar y explorar el dataset
+df <- read.csv("GermanCredit.csv")
+# Exploración básica
+str(df)
+summary(df)
+# Ver cuántos NA hay por columna
+colSums(is.na(df))
+# Reporte automático de exploración
+library(DataExplorer)
+create_report(df)
+#2 Imputación de valores faltantes
+library(mice)
+# Imputación de datos con mice
+df_imputado <- mice(df, m = 5, method = 'pmm', seed = 500)
+# Ver los resultados de imputación
+summary(df_imputado)
+# Obtener el dataset imputado
+df_completo <- complete(df_imputado, 1)
 
-# ---------------------------
-# 2. Cargar el dataset
-# ---------------------------
-data("GermanCredit")  # Viene en caret
-str(GermanCredit$Class)  # Clase objetivo: 'Bad' o 'Good'
+# 3 Transformación de variables: Conversión de variables categóricas 
+df_completo$credit_risk <- factor(df_completo$credit_risk, levels = c(0, 1))
+# Otras transformaciones, si es necesario:
+df_completo$employment_duration <- as.factor(df_completo$employment_duration)
+df_completo$personal_status_sex <- as.factor(df_completo$personal_status_sex)
+df_completo$property <- as.factor(df_completo$property)
 
-# Crear una variable binaria 0 (Good) y 1 (Bad)
-GermanCredit$credit_risk <- ifelse(GermanCredit$Class == "Bad", 1, 0)
-GermanCredit$credit_risk <- factor(GermanCredit$credit_risk, levels = c(0, 1))
-
-# ---------------------------
-# 3. Separar en train y test
-# ---------------------------
+# 4. Dividir los datos en entrenamiento y prueba
 set.seed(123)
-train_index <- createDataPartition(GermanCredit$credit_risk, p = 0.7, list = FALSE)
-train <- GermanCredit[train_index, ]
-test <- GermanCredit[-train_index, ]
+train_index <- createDataPartition(df_completo$credit_risk, p = 0.7, list = FALSE)
+train <- df_completo[train_index, ]
+test <- df_completo[-train_index, ]
 
-# ---------------------------
-# 4. Modelo de árbol de decisión
-# ---------------------------
-modelo_arbol <- rpart(credit_risk ~ . - Class, data = train, method = "class")
+# 5 Cargar el paquete para árboles de decisión
+library(rpart)
+# Modelo de Árbol de Decisión
+modelo_arbol <- rpart(credit_risk ~ ., data = train, method = "class")
+# Visualizar el árbol
+library(rpart.plot)
 rpart.plot(modelo_arbol)
+# Predicciones con el modelo de árbol
+pred_arbol <- predict(modelo_arbol, test, type = "class")
 
-# Predicción (probabilidades)
-pred_arbol_prob <- predict(modelo_arbol, test, type = "prob")[, 2]
-
-# Predicción (clases)
-pred_arbol_class <- predict(modelo_arbol, test, type = "class")
-
-# Matriz de confusión
-conf_matrix_arbol <- confusionMatrix(pred_arbol_class, test$credit_risk)
-print(conf_matrix_arbol)
-
-# Curva ROC y AUC
-roc_arbol <- roc(response = test$credit_risk, predictor = pred_arbol_prob)
-auc_arbol <- auc(roc_arbol)
-print(paste("AUC Árbol:", round(auc_arbol, 4)))
-
-# ---------------------------
-# 5. Modelo de regresión logística
-# ---------------------------
-modelo_logit <- glm(credit_risk ~ . - Class, data = train, family = "binomial")
-summary(modelo_logit)
-
-# Predicción (probabilidades)
+# 6 Evaluación del modelo (matriz de confusión)
+library(caret)
+pred_arbol <- factor(pred_arbol, levels = c(0, 1))
+confusionMatrix(pred_arbol, test$credit_risk)
+# Cargar el paquete para regresión logística
+library(glmnet)
+# Modelo de Regresión Logística
+modelo_logit <- glm(credit_risk ~ ., data = train, family = "binomial")
+# Predicciones con el modelo de regresión logística
 pred_logit_prob <- predict(modelo_logit, test, type = "response")
+pred_logit <- ifelse(pred_logit_prob > 0.5, 1, 0)
+pred_logit <- factor(pred_logit, levels = c(0, 1))
 
-# Clasificación basada en umbral 0.5
-pred_logit_class <- factor(ifelse(pred_logit_prob > 0.5, 1, 0), levels = c(0, 1))
+# Evaluación del modelo
+confusionMatrix(pred_logit, test$credit_risk)
 
-# Matriz de confusión
-conf_matrix_logit <- confusionMatrix(pred_logit_class, test$credit_risk)
-print(conf_matrix_logit)
+# 7 Evaluacion de los modelos
+library(pROC)
+# ROC para Árbol de Decisión
+roc_arbol <- roc(response = test$credit_risk, predictor = as.numeric(pred_arbol))
+auc_arbol <- auc(roc_arbol)
 
-# Curva ROC y AUC
-roc_logit <- roc(response = test$credit_risk, predictor = pred_logit_prob)
+# ROC para Regresión Logística
+roc_logit <- roc(response = test$credit_risk, predictor = as.numeric(pred_logit))
 auc_logit <- auc(roc_logit)
-print(paste("AUC Logística:", round(auc_logit, 4)))
 
-# ---------------------------
-# 6. Comparar gráficamente las curvas ROC
-# ---------------------------
-plot(roc_arbol, col = "blue", lwd = 2, main = "Curvas ROC: Árbol vs Logística")
-plot(roc_logit, col = "red", lwd = 2, add = TRUE)
-legend("bottomright",
-       legend = c(paste("Árbol (AUC =", round(auc_arbol, 3), ")"),
-                  paste("Logística (AUC =", round(auc_logit, 3), ")")),
-       col = c("blue", "red"),
-       lwd = 2)
+# Graficar las curvas ROC
+plot.roc(roc_arbol, col = "blue", main = "Curvas ROC - Modelos", lwd = 2)
+lines.roc(roc_logit, col = "red", lwd = 2)
+
+# Mostrar los valores AUC
+auc_arbol
+auc_logit
+
+
+#analisis univariado, bivariado
+library(ggplot2)
+
+# Variable numérica
+ggplot(df, aes(x = age)) + 
+  geom_histogram(binwidth = 5, fill = "skyblue", color = "black") +
+  theme_minimal()
+
+# Variable categórica
+ggplot(df, aes(x = housing)) + 
+  geom_bar(fill = "orange") +
+  theme_minimal()
+# Boxplot edad vs. riesgo crediticio
+ggplot(df, aes(x = credit_risk, y = age, fill = credit_risk)) +
+  geom_boxplot() +
+  theme_minimal()
+
+# Tabla de frecuencia
+table(df$credit_risk, df$housing)
