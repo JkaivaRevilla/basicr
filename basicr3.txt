@@ -1,0 +1,165 @@
+library(caret)
+library(dplyr)
+library(rpart)
+library(rpart.plot)
+library(xgboost)
+library(DataExplorer)
+library(ggplot2)
+library(mice)
+library(pROC)
+library(randomForest)
+
+######## load data
+df<-read.csv("Titanic-Dataset.csv",sep = ',')
+
+######## visualizacion, eda
+var_vacios<-colSums(is.na(df))
+var_vacios<-data.frame(var_vacios)
+summary(df)
+str(df)
+create_report(df)
+######## univarido, bivariado
+hist(df$Survived)
+boxplot(Age ~ Sex, df)
+table(df$Sex,df$Pclass)
+df%>%group_by(Pclass)%>%count()
+barplot(table(df$Survived))
+
+imp<-mice(df[,c("Age","Sex","Pclass")],m=5, method = "pmm")
+df$Age <- complete(imp, 1)$Age
+colSums(is.na(df))
+
+######## transformacion y seleccion de variables ################
+df_model<-df[,c("Survived","Pclass","Sex","Age","SibSp","Parch","Fare","Embarked")]
+
+df_model$Survived<-factor(df_model$Survived,levels = c(0,1),labels = c("No","Yes"))
+df_model$Sex<-as.factor(df_model$Sex)
+df_model$Embarked<-as.factor(df_model$Embarked)
+
+######## particion
+train_index<-createDataPartition(df_model$Survived,p=0.7,list = FALSE)
+train<-df_model[train_index,]
+test<-df_model[-train_index,]
+
+######## control
+control<-trainControl(method = "CV",number = 5,classProbs=TRUE,summaryFunction =twoClassSummary )
+#control <- trainControl(method = "cv",number = 5,classProbs = TRUE,summaryFunction = twoClassSummary)
+######## modelos
+
+######## modelos - Regresion Logistica
+modelo_log<- train(Survived~.,data=train,method='glm',family='binomial',metric='ROC',trControl=control)
+summary(modelo_log$finalModel)
+modelo_prob<-predict(modelo_log,newdata =test,type = "prob" )
+
+pred_class <- ifelse(pred_prob$"Yes" > 0.5, "Yes", "No")
+pred_class <- factor(pred_class, levels = c("No", "Yes"))
+test$Survived<-factor(test$Survived,levels =c("No","Yes") )
+
+confusionMatrix(pred_class, test$Survived)
+
+roc_log<-roc(test$Survived,pred_prob$"Yes",levels=c("No","Yes"),direction="<")
+plot(roc_log)
+
+
+######## modelos - arbol
+modelo_arbol<- train(Survived~.,data=train,method='rpart',metric='ROC',trControl=control)
+summary(modelo_arbol$finalModel)
+rpart.plot(modelo_arbol$finalModel)
+modelo_prob_arbol<-predict(modelo_arbol,newdata =test,type = "prob" )
+pred_class_arbol<-ifelse(modelo_prob_arbol$"Yes">0.5,"Yes","No")
+pred_class_arbol<-factor(pred_class_arbol,levels =c("No","Yes") )
+confusionMatrix(pred_class_arbol, test$Survived)
+
+roc_arbol<-roc(test$Survived,modelo_prob_arbol$"Yes",levels=c("No","Yes"),direction="<")
+plot(roc_arbol)
+
+
+
+######## modelos - rf
+modelo_rf<-train(Survived~.,data=train,method='rf',metric='ROC',trControl=control)
+modelo_prob_rf<-predict(modelo_rf,newdata =test,type = "prob" )
+pred_class_rf<-ifelse(modelo_prob_rf$"Yes">0.5,"Yes","No")
+pred_class_rf<-factor(pred_class_rf,levels = c("No","Yes"))
+confusionMatrix(pred_class_rf,test$Survived)
+roc_rf<-roc(test$Survived,modelo_prob_rf$"Yes",levels=c("No","Yes"),direction="<")
+plot(roc_rf)
+
+###########xgoobst
+
+xgb_train<-train
+xgb_test<-test
+
+xgb_train$Survived<-ifelse(xgb_train$Survived=="Yes",1,0)
+xgb_test$Survived<-ifelse(xgb_test$Survived=="Yes",1,0)
+
+x_train<-model.matrix(Survived~.-1,data=xgb_train)
+x_test<-model.matrix(Survived~.-1,data=xgb_test)
+
+y_train<-xgb_train$Survived
+y_test<-xgb_test$Survived
+
+dtrain<-xgb.DMatrix(data=x_train,label=y_train)
+dtest<-xgb.DMatrix(data=x_test,label=y_test)
+
+
+parametros <- list(objective = "binary:logistic",eval_metric = "auc")
+
+
+xgb_model<-xgb.train(data = dtrain,nrounds = 100,params = parametros)
+pred_prod_xgb<-predict(xgb_model,dtest)
+pred_class_xgb<-ifelse(pred_prod_xgb>0.5,1,0)
+pred_class_xgb<-factor(pred_class_xgb,levels = c("No","Yes"))
+confusionMatrix(pred_class_xgb,factor(y_test,labels = c("No","Yes")))
+
+xgb_model <- xgb.train(data = dtrain, nrounds = 100, params = parametros)
+
+# Predicción de probabilidades
+pred_prod_xgb <- predict(xgb_model, dtest)
+
+# Clasificación según umbral
+pred_class_xgb <- ifelse(pred_prod_xgb > 0.5, "Yes", "No")
+pred_class_xgb <- factor(pred_class_xgb, levels = c("No", "Yes"))
+y_test_factor <- factor(ifelse(y_test == 1, "Yes", "No"), levels = c("No", "Yes"))
+
+# Matriz de confusión
+confusionMatrix(pred_class_xgb, y_test_factor,direction="<")
+
+roc_xgb<-roc(y_test,pred_prod_xgb)
+y_test
+
+# Asegúrate de que y_test es un factor con niveles 0 = negativo, 1 = positivo
+roc_xgb <- roc(factor(y_test, levels = c(0, 1)), pred_prod_xgb, levels = c(0, 1), direction = "<")
+
+plot(roc_xgb, main = "ROC - XGBoost")
+
+plot(roc_log,col="blue")
+plot(roc_arbol,col="yellow",add=TRUE)
+plot(roc_rf,col="red",add=TRUE)
+plot(roc_xgb,col="black",add=TRUE)
+legend("bottomright",
+       legend=c("logistica","arbol","rfon","xgboost"),
+       col=c("blue","yellow","red","black"),
+       lwd=2)
+
+
+
+
+###############################################################
+# Filtrar los datos para la categoría "A"
+datos_a <- subset(datos, categoria == "A")
+library(dplyr)
+
+# 1. Tasa de supervivencia por sexo y clase
+titanic %>%
+  group_by(Sex, Pclass) %>%
+  summarise(SurvivalRate = mean(Survived), .groups = "drop")
+
+# 2. Promedio de edad por clase y supervivencia
+titanic %>%
+  group_by(Pclass, Survived) %>%
+  summarise(AvgAge = mean(Age, na.rm = TRUE), .groups = "drop")
+
+# 3. Conteo de pasajeros por clase y sexo
+titanic %>%
+  group_by(Pclass, Sex) %>%
+  summarise(Count = n(), .groups = "drop")
